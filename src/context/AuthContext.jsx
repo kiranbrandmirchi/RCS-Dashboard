@@ -4,6 +4,7 @@ import { supabase } from '../lib/supabase.js';
 const AuthContext = createContext(null);
 
 const DEV_BYPASS = import.meta.env.DEV;
+const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === 'true';
 const SUPABASE_TIMEOUT_MS = 5000;
 
 function withTimeout(promise, ms) {
@@ -19,9 +20,15 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [devMode, setDevMode] = useState(false);
 
-  const isAuthenticated = !!session || devMode;
+  const isAuthenticated = !!session || devMode || AUTH_DISABLED;
 
   useEffect(() => {
+    if (AUTH_DISABLED) {
+      setDevMode(true);
+      setUser({ email: 'public', user_metadata: { full_name: 'Public' } });
+      setLoading(false);
+      return;
+    }
     withTimeout(supabase.auth.getSession(), SUPABASE_TIMEOUT_MS)
       .then(({ data: { session: s } }) => {
         if (s) {
@@ -42,6 +49,8 @@ export function AuthProvider({ children }) {
         }
       })
       .finally(() => setLoading(false));
+
+    if (AUTH_DISABLED) return;
 
     let subscription;
     try {
