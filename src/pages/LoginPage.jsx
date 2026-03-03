@@ -75,6 +75,18 @@ export function LoginPage({ onSwitchToSignup }) {
               </button>
             </p>
           )}
+          <p className="auth-switch" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="auth-switch-link"
+              onClick={() => {
+                sessionStorage.setItem('auth_skip', '1');
+                window.location.reload();
+              }}
+            >
+              Skip login (public dashboard)
+            </button>
+          </p>
         </form>
       </div>
     </div>

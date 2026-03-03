@@ -4,7 +4,9 @@ import { supabase } from '../lib/supabase.js';
 const AuthContext = createContext(null);
 
 const DEV_BYPASS = import.meta.env.DEV;
-const AUTH_DISABLED = import.meta.env.VITE_AUTH_DISABLED === 'true';
+const AUTH_DISABLED =
+  ['true', '1', 'yes'].includes(String(import.meta.env.VITE_AUTH_DISABLED || '').toLowerCase()) ||
+  (typeof window !== 'undefined' && sessionStorage.getItem('auth_skip') === '1');
 const SUPABASE_TIMEOUT_MS = 5000;
 
 function withTimeout(promise, ms) {
