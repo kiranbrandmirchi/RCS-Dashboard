@@ -12,7 +12,7 @@ export function Header() {
   const handleShare = () => {
     if (navigator.share) {
       navigator.share({
-        title: 'Agency Dashboard Report',
+        title: 'Red Castle Services — Dashboard Report',
         text: 'Check out this marketing performance report!',
         url: window.location.href,
       }).catch(() => fallbackShare());
@@ -51,7 +51,7 @@ export function Header() {
           <span id="sb-sync-badge" style={{ color: 'var(--accent)', fontSize: 11, fontWeight: 600 }}>Live</span>
         </div>
         <button type="button" className="btn btn-outline" onClick={handleExportPDF}>↓ Export PDF</button>
-        <button type="button" className="btn btn-primary" onClick={handleShare}>Share Report</button>
+        <button type="button" className="btn btn-accent" onClick={handleShare}>Share Report</button>
         <button type="button" className="btn btn-outline" onClick={logout} title="Sign out">Log out</button>
       </div>
     </header>

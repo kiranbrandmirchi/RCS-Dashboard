@@ -24,8 +24,8 @@ export function LoginPage({ onSwitchToSignup }) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <h1>WowDashboard</h1>
-        <p className="login-subtitle">Sign in to your reporting suite</p>
+        <img src="/rc-logo-full.png" alt="Red Castle Services" style={{ maxWidth: 240, marginBottom: 16 }} />
+        <p className="login-subtitle">Sign in to your reporting dashboard</p>
         <form className="login-form" onSubmit={handleSubmit}>
           <div className="settings-form-group">
             <label htmlFor="login-email">Email</label>

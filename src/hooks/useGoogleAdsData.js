@@ -1,21 +1,5 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
-
-const PAGE_SIZE = 1000;
-
-async function fetchAllRows(queryFactory) {
-  const results = [];
-  let offset = 0;
-  while (true) {
-    const { data, error } = await queryFactory().range(offset, offset + PAGE_SIZE - 1);
-    if (error) throw error;
-    if (!data || data.length === 0) break;
-    results.push(...data);
-    if (data.length < PAGE_SIZE) break;
-    offset += PAGE_SIZE;
-  }
-  return results;
-}
+import { sbFetchAll, sbFetchAllParallel, buildQuery } from '../lib/supabaseRest';
 
 function computeDateRange(preset, customFrom, customTo) {
   const today = new Date();
@@ -48,7 +32,6 @@ function computePreviousPeriod(fromStr, toStr) {
 }
 
 function num(v) { return Number(v) || 0; }
-function costFromMicros(v) { return num(v) / 1e6; }
 
 function addMetrics(o) {
   o.ctr = o.impressions ? (o.clicks / o.impressions) * 100 : 0;
@@ -69,7 +52,11 @@ export function useGoogleAdsData() {
   const [rawCampaigns, setRawCampaigns] = useState([]);
   const [rawAdGroups, setRawAdGroups] = useState([]);
   const [rawKeywords, setRawKeywords] = useState([]);
+  const [rawSearchTerms, setRawSearchTerms] = useState([]);
+  const [rawGeo, setRawGeo] = useState([]);
+  const [rawConversions, setRawConversions] = useState([]);
   const [rawCompareCampaigns, setRawCompareCampaigns] = useState([]);
+  const [campaignStatusMap, setCampaignStatusMap] = useState(new Map());
   const [customers, setCustomers] = useState([]);
   const [channelTypes, setChannelTypes] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -93,86 +80,117 @@ export function useGoogleAdsData() {
     setError(null);
     try {
       const { from, to } = computeDateRange(f.datePreset, f.dateFrom, f.dateTo);
-      const hasCampaignFilters = f.customerId !== 'ALL' || f.channelType !== 'all' || f.status !== 'all' || f.campaignSearch;
+      const cid = f.customerId;
 
-      const buildCampaignQuery = (dateFrom, dateTo) => () => {
-        let q = supabase.from('google_campaigns_data').select('*').order('segment_date', { ascending: false });
-        if (dateFrom) q = q.gte('segment_date', dateFrom);
-        if (dateTo) q = q.lte('segment_date', dateTo);
-        if (f.customerId !== 'ALL') q = q.eq('customer_id', f.customerId);
-        if (f.channelType !== 'all') q = q.eq('channel_type', f.channelType);
-        if (f.status !== 'all') q = q.eq('campaign_status', f.status);
-        if (f.campaignSearch) q = q.ilike('campaign_name', `%${f.campaignSearch}%`);
-        return q;
-      };
+      if (!optionsLoaded.current) {
+        const custData = await sbFetchAll(
+          'gads_customers?select=customer_id,descriptive_name&status=eq.ENABLED&order=descriptive_name'
+        );
+        console.log('[GAds] gads_customers:', custData.length, 'rows');
+        if (custData.length) {
+          setCustomers(custData.map((c) => ({ id: c.customer_id, name: c.descriptive_name || c.customer_id })));
+        }
+      }
+
+      const campaignExtra = '&order=date.desc'
+        + (f.campaignSearch ? '&campaign_name=ilike.*' + encodeURIComponent(f.campaignSearch) + '*' : '');
+      const adGroupExtra = '&order=date.desc'
+        + (f.adGroupSearch ? '&ad_group_name=ilike.*' + encodeURIComponent(f.adGroupSearch) + '*' : '');
+      const keywordExtra = '&order=date.desc'
+        + (f.keywordSearch ? '&keyword_text=ilike.*' + encodeURIComponent(f.keywordSearch) + '*' : '');
 
       let compFrom = null, compTo = null;
       if (f.compareOn) {
         if (f.compareFrom && f.compareTo) {
-          compFrom = f.compareFrom;
-          compTo = f.compareTo;
+          compFrom = f.compareFrom; compTo = f.compareTo;
         } else {
           const prev = computePreviousPeriod(from, to);
-          compFrom = prev.from;
-          compTo = prev.to;
+          compFrom = prev.from; compTo = prev.to;
         }
       }
 
-      const fetches = [
-        fetchAllRows(buildCampaignQuery(from, to)),
-        fetchAllRows(() => {
-          let q = supabase.from('google_ad_groups_data').select('*').order('segment_date', { ascending: false });
-          if (from) q = q.gte('segment_date', from);
-          if (to) q = q.lte('segment_date', to);
-          if (f.adGroupSearch) q = q.ilike('ad_group_name', `%${f.adGroupSearch}%`);
-          return q;
-        }),
-        fetchAllRows(() => {
-          let q = supabase.from('google_keywords_data').select('*').order('segment_date', { ascending: false });
-          if (from) q = q.gte('segment_date', from);
-          if (to) q = q.lte('segment_date', to);
-          if (f.keywordSearch) q = q.ilike('keyword_text', `%${f.keywordSearch}%`);
-          return q;
-        }),
-      ];
+      const safe = (promise) => promise.catch((err) => {
+        console.warn('[GAds] Table fetch failed, skipping:', err.message);
+        return [];
+      });
 
+      const [campaignData, statusData] = await Promise.all([
+        safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: campaignExtra }))),
+        safe(sbFetchAllParallel(buildQuery('gads_campaign_status', { customerId: cid }))),
+      ]);
+
+      const [adGroupData, keywordData, searchTermData] = await Promise.all([
+        safe(sbFetchAllParallel(buildQuery('gads_adgroup_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: adGroupExtra }))),
+        safe(sbFetchAllParallel(buildQuery('gads_keyword_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: keywordExtra }))),
+        safe(sbFetchAllParallel(buildQuery('gads_search_term_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
+      ]);
+
+      const [geoData, conversionData] = await Promise.all([
+        safe(sbFetchAllParallel(buildQuery('gads_geo_location_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
+        safe(sbFetchAllParallel(buildQuery('gads_conversion_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
+      ]);
+
+      let compareCampaignData = [];
       if (f.compareOn && compFrom && compTo) {
-        fetches.push(fetchAllRows(buildCampaignQuery(compFrom, compTo)));
+        compareCampaignData = await safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', { customerId: cid, dateFrom: compFrom, dateTo: compTo, extra: campaignExtra })));
       }
 
-      const results = await Promise.all(fetches);
-      const [campaignData, adGroupData, keywordData] = results;
-      const compareCampaignData = results[3] || [];
+      console.log('[GAds] Fetch results:', {
+        campaigns: campaignData.length,
+        adGroups: adGroupData.length,
+        keywords: keywordData.length,
+        searchTerms: searchTermData.length,
+        geo: geoData.length,
+        conversions: conversionData.length,
+        statuses: statusData.length,
+        dateRange: { from, to },
+      });
+      if (campaignData.length > 0) console.log('[GAds] Sample campaign row:', campaignData[0]);
 
-      let filteredAdGroups = adGroupData;
-      let filteredKeywords = keywordData;
-      if (hasCampaignFilters) {
-        const ids = new Set(campaignData.map((c) => String(c.campaign_id)));
-        filteredAdGroups = adGroupData.filter((a) => ids.has(String(a.campaign_id)));
-        filteredKeywords = keywordData.filter((k) => ids.has(String(k.campaign_id)));
+      if (campaignData.length === 0 && statusData.length === 0) {
+        console.warn('[GAds] All tables returned 0 rows. Check RLS policies or ensure tables have data.');
       }
 
-      setRawCampaigns(campaignData);
-      setRawAdGroups(filteredAdGroups);
-      setRawKeywords(filteredKeywords);
-      setRawCompareCampaigns(f.compareOn ? compareCampaignData : []);
+      const statusMap = new Map();
+      statusData.forEach((s) => statusMap.set(String(s.campaign_id), s));
+      setCampaignStatusMap(statusMap);
 
-      if (!optionsLoaded.current && campaignData.length > 0) {
-        const custMap = new Map();
-        const types = new Set();
-        campaignData.forEach((r) => {
-          if (r.customer_id != null) custMap.set(String(r.customer_id), r.customer_name || String(r.customer_id));
-          if (r.channel_type) types.add(r.channel_type);
+      let validCampaignIds = null;
+      if (f.channelType !== 'all' || f.status !== 'all') {
+        const filtered = statusData.filter((s) => {
+          if (f.channelType !== 'all' && s.campaign_type !== f.channelType) return false;
+          if (f.status !== 'all' && s.campaign_status !== f.status) return false;
+          return true;
         });
-        setCustomers([...custMap.entries()].map(([id, name]) => ({ id, name })));
+        validCampaignIds = new Set(filtered.map((s) => String(s.campaign_id)));
+      }
+
+      const filterByCampaign = (rows) =>
+        validCampaignIds ? rows.filter((r) => validCampaignIds.has(String(r.campaign_id))) : rows;
+
+      setRawCampaigns(filterByCampaign(campaignData));
+      setRawAdGroups(filterByCampaign(adGroupData));
+      setRawKeywords(filterByCampaign(keywordData));
+      setRawSearchTerms(filterByCampaign(searchTermData));
+      setRawGeo(filterByCampaign(geoData));
+      setRawConversions(filterByCampaign(conversionData));
+      setRawCompareCampaigns(f.compareOn ? filterByCampaign(compareCampaignData) : []);
+
+      if (!optionsLoaded.current) {
+        const types = new Set();
+        statusData.forEach((s) => { if (s.campaign_type) types.add(s.campaign_type); });
+        if (types.size === 0) campaignData.forEach((r) => { if (r.campaign_type) types.add(r.campaign_type); });
         setChannelTypes([...types].sort());
         optionsLoaded.current = true;
       }
     } catch (err) {
-      console.error('Google Ads fetch error:', err);
+      console.error('[GAds] Fetch error:', err);
       const msg = err.message || 'Failed to fetch data';
-      setError(msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
-        ? 'Cannot reach Supabase. Check your network connection or try a VPN/mobile hotspot.' : msg);
+      setError(
+        msg.toLowerCase().includes('fetch') || msg.toLowerCase().includes('network')
+          ? 'Cannot reach Supabase. Check your network connection or try a VPN/mobile hotspot.'
+          : msg
+      );
     } finally {
       setLoading(false);
     }
@@ -180,20 +198,17 @@ export function useGoogleAdsData() {
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
-  /* ── Aggregations ── */
-
+  /* ── KPIs ── */
   const kpis = useMemo(() => {
     if (!rawCampaigns.length) return null;
-    const k = { cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0, allConversions: 0, interactions: 0, phoneCalls: 0 };
+    const k = { cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0, allConversions: 0 };
     rawCampaigns.forEach((r) => {
-      k.cost += costFromMicros(r.cost_micros);
+      k.cost += num(r.cost);
       k.clicks += num(r.clicks);
       k.impressions += num(r.impressions);
       k.conversions += num(r.conversions);
       k.conversions_value += num(r.conversions_value);
       k.allConversions += num(r.all_conversions);
-      k.interactions += num(r.interactions);
-      k.phoneCalls += num(r.phone_calls);
     });
     k.ctr = k.impressions ? (k.clicks / k.impressions) * 100 : 0;
     k.cpc = k.clicks ? k.cost / k.clicks : 0;
@@ -204,117 +219,213 @@ export function useGoogleAdsData() {
     return k;
   }, [rawCampaigns]);
 
+  /* ── Campaign Types ── */
   const campaignTypesAgg = useMemo(() => {
     const map = new Map();
     let totalCost = 0;
     rawCampaigns.forEach((r) => {
-      const type = r.channel_type || 'Unknown';
-      if (!map.has(type)) map.set(type, { type, campaign_ids: new Set(), cost: 0, clicks: 0, impressions: 0, conversions: 0 });
+      const type = r.campaign_type || campaignStatusMap.get(String(r.campaign_id))?.campaign_type || 'Unknown';
+      if (!map.has(type)) map.set(type, { type, campaign_ids: new Set(), cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0 });
       const a = map.get(type);
       a.campaign_ids.add(r.campaign_id);
-      a.cost += costFromMicros(r.cost_micros);
-      a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
-      totalCost += costFromMicros(r.cost_micros);
+      const cost = num(r.cost);
+      a.cost += cost;
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
+      totalCost += cost;
     });
     return [...map.values()].map((o) => {
-      o.campaign_count = o.campaign_ids.size; delete o.campaign_ids;
+      o.campaign_count = o.campaign_ids.size;
+      delete o.campaign_ids;
       o.spend_pct = totalCost ? (o.cost / totalCost) * 100 : 0;
       return addMetrics(o);
     }).sort((a, b) => b.cost - a.cost);
-  }, [rawCampaigns]);
+  }, [rawCampaigns, campaignStatusMap]);
 
+  /* ── Campaigns ── */
   const campaignsAgg = useMemo(() => {
     const map = new Map();
     rawCampaigns.forEach((r) => {
       const id = r.campaign_id;
-      if (!map.has(id)) map.set(id, { campaign_id: id, campaign_name: r.campaign_name, campaign_status: r.campaign_status, channel_type: r.channel_type, customer_name: r.customer_name, location: r.location, cost: 0, clicks: 0, impressions: 0, conversions: 0, allConversions: 0 });
+      if (!map.has(id)) {
+        const status = campaignStatusMap.get(String(id));
+        map.set(id, {
+          campaign_id: id,
+          campaign_name: r.campaign_name,
+          campaign_status: status?.campaign_status || '',
+          channel_type: r.campaign_type || status?.campaign_type || '',
+          cost: 0, clicks: 0, impressions: 0, conversions: 0,
+          conversions_value: 0, allConversions: 0,
+        });
+      }
       const a = map.get(id);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions); a.allConversions += num(r.all_conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
+      a.allConversions += num(r.all_conversions);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawCampaigns]);
+  }, [rawCampaigns, campaignStatusMap]);
 
+  /* ── Ad Groups ── */
   const adGroupsAgg = useMemo(() => {
-    const campaignNameMap = new Map();
-    rawCampaigns.forEach((r) => { if (r.campaign_id && r.campaign_name) campaignNameMap.set(String(r.campaign_id), r.campaign_name); });
-
     const map = new Map();
     rawAdGroups.forEach((r) => {
       const id = r.ad_group_id;
       if (!map.has(id)) map.set(id, {
-        ad_group_id: id, ad_group_name: r.ad_group_name,
-        campaign_name: r.campaign_name || campaignNameMap.get(String(r.campaign_id)) || '',
-        campaign_id: r.campaign_id, ad_group_status: r.ad_group_status,
-        cost: 0, clicks: 0, impressions: 0, conversions: 0,
+        ad_group_id: id,
+        ad_group_name: r.ad_group_name,
+        campaign_name: r.campaign_name || '',
+        campaign_id: r.campaign_id,
+        ad_group_status: '',
+        cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0,
       });
       const a = map.get(id);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawAdGroups, rawCampaigns]);
+  }, [rawAdGroups]);
 
+  /* ── Keywords ── */
   const keywordsAgg = useMemo(() => {
-    const campaignNameMap = new Map();
-    rawCampaigns.forEach((r) => { if (r.campaign_id && r.campaign_name) campaignNameMap.set(String(r.campaign_id), r.campaign_name); });
-
-    const adGroupNameMap = new Map();
-    rawAdGroups.forEach((r) => { if (r.ad_group_id && r.ad_group_name) adGroupNameMap.set(String(r.ad_group_id), r.ad_group_name); });
-
     const map = new Map();
     rawKeywords.forEach((r) => {
-      const id = `${r.ad_group_id}_${r.criterion_id}`;
+      const id = `${r.ad_group_id}_${r.keyword_id}`;
       if (!map.has(id)) map.set(id, {
-        _key: id, criterion_id: r.criterion_id, keyword_text: r.keyword_text,
-        keyword_match_type: r.keyword_match_type, criterion_status: r.criterion_status,
-        campaign_id: r.campaign_id, ad_group_id: r.ad_group_id,
-        campaign_name: campaignNameMap.get(String(r.campaign_id)) || '',
-        ad_group_name: adGroupNameMap.get(String(r.ad_group_id)) || '',
-        cost: 0, clicks: 0, impressions: 0, conversions: 0,
+        _key: id,
+        keyword_id: r.keyword_id,
+        keyword_text: r.keyword_text,
+        keyword_match_type: r.keyword_match_type,
+        campaign_id: r.campaign_id,
+        ad_group_id: r.ad_group_id,
+        campaign_name: r.campaign_name || '',
+        ad_group_name: r.ad_group_name || '',
+        quality_score: r.quality_score,
+        cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0,
       });
       const a = map.get(id);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawKeywords, rawCampaigns, rawAdGroups]);
+  }, [rawKeywords]);
 
+  /* ── Search Terms ── */
+  const searchTermsAgg = useMemo(() => {
+    const map = new Map();
+    rawSearchTerms.forEach((r) => {
+      const id = `${r.ad_group_id}_${r.search_term}`;
+      if (!map.has(id)) map.set(id, {
+        _key: id,
+        search_term: r.search_term,
+        campaign_id: r.campaign_id,
+        campaign_name: r.campaign_name || '',
+        ad_group_id: r.ad_group_id,
+        cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0,
+      });
+      const a = map.get(id);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
+    });
+    return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
+  }, [rawSearchTerms]);
+
+  /* ── Geo ── */
   const geoAgg = useMemo(() => {
     const map = new Map();
-    rawCampaigns.forEach((r) => {
-      const loc = r.location || 'Unknown';
-      if (!map.has(loc)) map.set(loc, { location: loc, cost: 0, clicks: 0, impressions: 0, conversions: 0 });
+    rawGeo.forEach((r) => {
+      const loc = r.most_specific || r.city || r.region || r.country || 'Unknown';
+      if (!map.has(loc)) map.set(loc, {
+        location: loc,
+        country: r.country || '',
+        region: r.region || '',
+        city: r.city || '',
+        cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0,
+      });
       const a = map.get(loc);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawCampaigns]);
+  }, [rawGeo]);
 
+  /* ── Conversions ── */
   const conversionsAgg = useMemo(() => {
-    return campaignsAgg.filter((c) => c.conversions > 0 || c.allConversions > 0).sort((a, b) => b.conversions - a.conversions);
-  }, [campaignsAgg]);
+    const map = new Map();
+    rawConversions.forEach((r) => {
+      const id = `${r.campaign_id}_${r.conversion_action_id}`;
+      if (!map.has(id)) {
+        const status = campaignStatusMap.get(String(r.campaign_id));
+        map.set(id, {
+          _key: id,
+          campaign_id: r.campaign_id,
+          campaign_name: r.campaign_name || '',
+          conversion_action_name: r.conversion_action_name || '',
+          conversion_action_category: r.conversion_action_category || '',
+          channel_type: status?.campaign_type || '',
+          conversions: 0, conversions_value: 0, allConversions: 0, cost: 0,
+        });
+      }
+      const a = map.get(id);
+      a.conversions += num(r.conversions);
+      a.conversions_value += num(r.conversions_value);
+    });
 
+    const campaignCostMap = new Map();
+    rawCampaigns.forEach((r) => {
+      campaignCostMap.set(r.campaign_id, (campaignCostMap.get(r.campaign_id) || 0) + num(r.cost));
+    });
+
+    return [...map.values()].map((o) => {
+      o.cost = campaignCostMap.get(o.campaign_id) || 0;
+      o.cpa = o.conversions ? o.cost / o.conversions : 0;
+      return o;
+    }).sort((a, b) => b.conversions - a.conversions);
+  }, [rawConversions, rawCampaigns, campaignStatusMap]);
+
+  /* ── Daily Trends ── */
   const dailyTrends = useMemo(() => {
     const map = new Map();
     rawCampaigns.forEach((r) => {
-      const d = r.segment_date; if (!d) return;
+      const d = r.date; if (!d) return;
       if (!map.has(d)) map.set(d, { date: d, cost: 0, clicks: 0, impressions: 0, conversions: 0 });
       const a = map.get(d);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => a.date.localeCompare(b.date));
   }, [rawCampaigns]);
 
+  /* ── Compare KPIs ── */
   const compareKpis = useMemo(() => {
     if (!rawCompareCampaigns.length) return null;
-    const k = { cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0, allConversions: 0, interactions: 0, phoneCalls: 0 };
+    const k = { cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0, allConversions: 0 };
     rawCompareCampaigns.forEach((r) => {
-      k.cost += costFromMicros(r.cost_micros);
+      k.cost += num(r.cost);
       k.clicks += num(r.clicks);
       k.impressions += num(r.impressions);
       k.conversions += num(r.conversions);
       k.conversions_value += num(r.conversions_value);
       k.allConversions += num(r.all_conversions);
-      k.interactions += num(r.interactions);
-      k.phoneCalls += num(r.phone_calls);
     });
     k.ctr = k.impressions ? (k.clicks / k.impressions) * 100 : 0;
     k.cpc = k.clicks ? k.cost / k.clicks : 0;
@@ -325,14 +436,18 @@ export function useGoogleAdsData() {
     return k;
   }, [rawCompareCampaigns]);
 
+  /* ── Compare Daily Trends ── */
   const compareDailyTrends = useMemo(() => {
     if (!rawCompareCampaigns.length) return [];
     const map = new Map();
     rawCompareCampaigns.forEach((r) => {
-      const d = r.segment_date; if (!d) return;
+      const d = r.date; if (!d) return;
       if (!map.has(d)) map.set(d, { date: d, cost: 0, clicks: 0, impressions: 0, conversions: 0 });
       const a = map.get(d);
-      a.cost += costFromMicros(r.cost_micros); a.clicks += num(r.clicks); a.impressions += num(r.impressions); a.conversions += num(r.conversions);
+      a.cost += num(r.cost);
+      a.clicks += num(r.clicks);
+      a.impressions += num(r.impressions);
+      a.conversions += num(r.conversions);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => a.date.localeCompare(b.date));
   }, [rawCompareCampaigns]);
@@ -340,9 +455,22 @@ export function useGoogleAdsData() {
   return {
     filters, updateFilter, batchUpdateFilters, fetchData,
     loading, error, customers, channelTypes,
-    kpis, compareKpis, campaignTypes: campaignTypesAgg, campaigns: campaignsAgg,
-    adGroups: adGroupsAgg, keywords: keywordsAgg,
-    geoData: geoAgg, conversionsData: conversionsAgg, dailyTrends, compareDailyTrends,
-    rowCounts: { campaigns: rawCampaigns.length, adGroups: rawAdGroups.length, keywords: rawKeywords.length },
+    kpis, compareKpis,
+    campaignTypes: campaignTypesAgg,
+    campaigns: campaignsAgg,
+    adGroups: adGroupsAgg,
+    keywords: keywordsAgg,
+    searchTerms: searchTermsAgg,
+    geoData: geoAgg,
+    conversionsData: conversionsAgg,
+    dailyTrends, compareDailyTrends,
+    rowCounts: {
+      campaigns: rawCampaigns.length,
+      adGroups: rawAdGroups.length,
+      keywords: rawKeywords.length,
+      searchTerms: rawSearchTerms.length,
+      geo: rawGeo.length,
+      conversions: rawConversions.length,
+    },
   };
 }

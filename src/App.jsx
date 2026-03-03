@@ -52,7 +52,7 @@ export default function App() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      showNotification('Welcome to your Agency Dashboard!');
+      showNotification('Welcome to your Red Castle Dashboard!');
     }
   }, [isAuthenticated, showNotification]);
 

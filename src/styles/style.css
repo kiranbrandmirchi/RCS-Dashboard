@@ -1,23 +1,23 @@
 /* ============================================
-   CHIPPER DIGITAL — BRAND CSS VARIABLES
+   RED CASTLE SERVICES — BRAND CSS VARIABLES
    ============================================ */
 :root {
-    /* Chipper Brand Colors */
-    --primary: #ED1C24;
-    --primary-dark: #C41920;
-    --primary-light: #F04E54;
+    /* Red Castle Brand Colors */
+    --primary: #E12627;
+    --primary-dark: #B81E20;
+    --primary-light: #F04E50;
     --primary-bg: #FFF0F0;
-    --navy: #1A1F71;
-    --navy-dark: #12154F;
-    --navy-light: #2A3090;
-    --navy-bg: #EEEEF8;
-    --accent: #2E9E40;
-    --accent-dark: #237A31;
-    --accent-bg: #EDFBF0;
+    --navy: #404040;
+    --navy-dark: #2D2D2D;
+    --navy-light: #5A5A5A;
+    --navy-bg: #F0F0F0;
+    --accent: #0083CB;
+    --accent-dark: #006AA3;
+    --accent-bg: #E8F4FC;
     --warning: #F5A623;
     --warning-dark: #D48E17;
     --warning-bg: #FFF8EB;
-    --danger: #ED1C24;
+    --danger: #E12627;
     --danger-bg: #FFF0F0;
     --purple: #8B3F8E;
     --purple-bg: #F6EEF7;
@@ -26,20 +26,20 @@
     --coral: #E8613C;
     --lime: #D4E000;
     --orange: #F5A623;
-    --indigo: #2D2A6E;
+    --indigo: #404040;
     /* Neutral Palette */
     --bg: #FFFFFF;
-    --bg-secondary: #F7F7FB;
-    --bg-tertiary: #EFEFFA;
+    --bg-secondary: #F7F7F9;
+    --bg-tertiary: #EFEFEF;
     --bg-warm: #FAF8F5;
-    --border: #E0E0EC;
-    --border-light: #EFEFFA;
-    --text-primary: #1A1F71;
-    --text-secondary: #4A4E78;
-    --text-muted: #8E91B5;
+    --border: #E0E0E4;
+    --border-light: #EFEFEF;
+    --text-primary: #404040;
+    --text-secondary: #5A5A5A;
+    --text-muted: #999999;
     --text-white: #FFFFFF;
     /* Typography */
-    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     --font-mono: 'Roboto Mono', 'SF Mono', 'Fira Code', monospace;
     /* Layout */
     --sidebar-width: 260px;
@@ -50,11 +50,11 @@
     --radius-lg: 14px;
     --radius-xl: 20px;
     /* Shadows */
-    --shadow-xs: 0 1px 2px rgba(26,31,113,0.04);
-    --shadow-sm: 0 1px 3px rgba(26,31,113,0.06), 0 1px 2px rgba(26,31,113,0.04);
-    --shadow-md: 0 4px 6px -1px rgba(26,31,113,0.07), 0 2px 4px -1px rgba(26,31,113,0.04);
-    --shadow-lg: 0 10px 20px -3px rgba(26,31,113,0.10), 0 4px 6px -2px rgba(26,31,113,0.05);
-    --shadow-xl: 0 20px 40px -5px rgba(26,31,113,0.12), 0 8px 10px -4px rgba(26,31,113,0.06);
+    --shadow-xs: 0 1px 2px rgba(64,64,64,0.04);
+    --shadow-sm: 0 1px 3px rgba(64,64,64,0.06), 0 1px 2px rgba(64,64,64,0.04);
+    --shadow-md: 0 4px 6px -1px rgba(64,64,64,0.07), 0 2px 4px -1px rgba(64,64,64,0.04);
+    --shadow-lg: 0 10px 20px -3px rgba(64,64,64,0.10), 0 4px 6px -2px rgba(64,64,64,0.05);
+    --shadow-xl: 0 20px 40px -5px rgba(64,64,64,0.12), 0 8px 10px -4px rgba(64,64,64,0.06);
     /* Platform Colors */
     --google: #4285F4;
     --meta: #1877F2;
@@ -240,6 +240,19 @@ body {
     gap: 1px;
 }
 
+.brand-logo-img {
+    max-width: 170px;
+    height: auto;
+    border-radius: var(--radius-sm);
+    background: #fff;
+    padding: 6px 10px;
+}
+
+.sidebar.collapsed .brand-logo-img {
+    max-width: 36px;
+    padding: 4px;
+}
+
 .brand-logo-text .brand-chipper {
     font-size: 26px;
     font-weight: 800;
@@ -324,7 +337,8 @@ body {
     background: var(--primary);
     color: #FFFFFF;
     font-weight: 600;
-    box-shadow: 0 2px 8px rgba(237,28,36,0.3);
+    box-shadow: 0 2px 8px rgba(225,38,39,0.3);
+    border-left: 3px solid var(--accent);
 }
 
 .platform-dot {
@@ -371,7 +385,7 @@ body {
 }
 
 .client-selector:focus {
-    border-color: var(--primary);
+    border-color: var(--accent);
     background: rgba(255,255,255,0.1);
 }
 
@@ -399,7 +413,7 @@ body {
 .header {
     height: var(--header-height);
     background: var(--bg);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 2px solid var(--accent);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -490,8 +504,8 @@ body {
 }
 
 .header-filters select:focus {
-    border-color: var(--navy);
-    box-shadow: 0 0 0 2px var(--navy-bg);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-bg);
 }
 
 /* ============================================
@@ -516,13 +530,26 @@ body {
     background: var(--primary);
     color: white;
     border-color: var(--primary);
-    box-shadow: 0 1px 3px rgba(237,28,36,0.2);
+    box-shadow: 0 1px 3px rgba(225,38,39,0.2);
 }
 
 .btn-primary:hover {
     background: var(--primary-dark);
     border-color: var(--primary-dark);
-    box-shadow: 0 2px 6px rgba(237,28,36,0.3);
+    box-shadow: 0 2px 6px rgba(225,38,39,0.3);
+}
+
+.btn-accent {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+    box-shadow: 0 1px 3px rgba(0,131,203,0.2);
+}
+
+.btn-accent:hover {
+    background: var(--accent-dark);
+    border-color: var(--accent-dark);
+    box-shadow: 0 2px 6px rgba(0,131,203,0.3);
 }
 
 .btn-navy {
@@ -544,9 +571,9 @@ body {
 }
 
 .btn-outline:hover {
-    color: var(--navy);
-    border-color: var(--navy);
-    background: var(--navy-bg);
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-bg);
 }
 
 .btn-sm {
@@ -580,6 +607,8 @@ body {
     font-weight: 800;
     color: var(--navy);
     letter-spacing: -0.5px;
+    border-left: 4px solid var(--accent);
+    padding-left: 12px;
 }
 
 .page-title-bar p {
@@ -604,8 +633,8 @@ body {
 }
 
 .insight-banner .icon { font-size: 18px; flex-shrink: 0; }
-.insight-banner.success { background: var(--accent-bg); color: #1A6B2A; border-color: #C6F0CE; }
-.insight-banner.info { background: var(--navy-bg); color: var(--navy); border-color: #D0D0F0; }
+.insight-banner.success { background: var(--accent-bg); color: var(--accent-dark); border-color: #B4D9EE; }
+.insight-banner.info { background: var(--navy-bg); color: var(--navy); border-color: #D0D0D8; }
 .insight-banner.warning { background: var(--warning-bg); color: #8C5E0A; border-color: #FDE8A0; }
 .insight-banner.danger { background: var(--primary-bg); color: var(--primary-dark); border-color: #FDD; }
 
@@ -637,7 +666,7 @@ body {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 3px;
-    background: linear-gradient(90deg, var(--navy), var(--navy-light));
+    background: linear-gradient(90deg, var(--accent), var(--primary));
     opacity: 0;
     transition: opacity 0.25s;
 }
@@ -2466,7 +2495,7 @@ body {
     display: inline-block;
     height: 6px;
     border-radius: 3px;
-    background: linear-gradient(90deg, var(--navy), var(--primary));
+    background: linear-gradient(90deg, var(--accent), var(--primary));
     vertical-align: middle;
     margin-right: 6px;
     min-width: 4px;

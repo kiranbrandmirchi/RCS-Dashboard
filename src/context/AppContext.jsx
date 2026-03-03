@@ -10,24 +10,44 @@ const STORAGE_KEYS = {
   dangerColor: 'dangerColor',
 };
 
+const BRAND_VERSION = 'redcastle-v1';
+
+const DEFAULTS = {
+  agencyName: 'Red Castle',
+  agencyLogo: 'SERVICES',
+  primary: '#E12627',
+  accent: '#0083CB',
+  warning: '#F5A623',
+  danger: '#E12627',
+};
+
+function migrateBrand() {
+  if (localStorage.getItem('brandVersion') !== BRAND_VERSION) {
+    Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
+    localStorage.setItem('brandVersion', BRAND_VERSION);
+  }
+}
+
 const AppContext = createContext(null);
 
 export function AppProvider({ children }) {
+  migrateBrand();
+
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentClient, setCurrentClient] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [branding, setBranding] = useState(() => ({
-    agencyName: localStorage.getItem(STORAGE_KEYS.agencyName) || 'chipper',
-    agencyLogo: localStorage.getItem(STORAGE_KEYS.agencyLogo) || 'DIGITAL',
+    agencyName: localStorage.getItem(STORAGE_KEYS.agencyName) || DEFAULTS.agencyName,
+    agencyLogo: localStorage.getItem(STORAGE_KEYS.agencyLogo) || DEFAULTS.agencyLogo,
   }));
   const [colors, setColors] = useState(() => {
     const root = typeof document !== 'undefined' ? document.documentElement : null;
-    const primary = localStorage.getItem(STORAGE_KEYS.primaryColor) || '#ED1C24';
-    const accent = localStorage.getItem(STORAGE_KEYS.accentColor) || '#2E9E40';
-    const warning = localStorage.getItem(STORAGE_KEYS.warningColor) || '#F5A623';
-    const danger = localStorage.getItem(STORAGE_KEYS.dangerColor) || '#ED1C24';
+    const primary = localStorage.getItem(STORAGE_KEYS.primaryColor) || DEFAULTS.primary;
+    const accent = localStorage.getItem(STORAGE_KEYS.accentColor) || DEFAULTS.accent;
+    const warning = localStorage.getItem(STORAGE_KEYS.warningColor) || DEFAULTS.warning;
+    const danger = localStorage.getItem(STORAGE_KEYS.dangerColor) || DEFAULTS.danger;
     if (root) {
       root.style.setProperty('--primary', primary);
       root.style.setProperty('--accent', accent);
@@ -99,17 +119,17 @@ export function AppProvider({ children }) {
 
   const resetSettings = useCallback(() => {
     Object.values(STORAGE_KEYS).forEach((k) => localStorage.removeItem(k));
-    setBranding({ agencyName: 'chipper', agencyLogo: 'DIGITAL' });
+    setBranding({ agencyName: DEFAULTS.agencyName, agencyLogo: DEFAULTS.agencyLogo });
     setColors({
-      primary: '#ED1C24',
-      accent: '#2E9E40',
-      warning: '#F5A623',
-      danger: '#ED1C24',
+      primary: DEFAULTS.primary,
+      accent: DEFAULTS.accent,
+      warning: DEFAULTS.warning,
+      danger: DEFAULTS.danger,
     });
-    document.documentElement.style.setProperty('--primary', '#ED1C24');
-    document.documentElement.style.setProperty('--accent', '#2E9E40');
-    document.documentElement.style.setProperty('--warning', '#F5A623');
-    document.documentElement.style.setProperty('--danger', '#ED1C24');
+    document.documentElement.style.setProperty('--primary', DEFAULTS.primary);
+    document.documentElement.style.setProperty('--accent', DEFAULTS.accent);
+    document.documentElement.style.setProperty('--warning', DEFAULTS.warning);
+    document.documentElement.style.setProperty('--danger', DEFAULTS.danger);
     showNotification('Settings reset.');
     setTimeout(() => window.location.reload(), 500);
   }, [showNotification]);

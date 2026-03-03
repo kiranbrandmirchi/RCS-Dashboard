@@ -82,8 +82,7 @@ export function Sidebar() {
     <aside className={sidebarClass} id="sidebar">
       <div className="sidebar-brand">
         <div className="brand-logo-text" id="brandLogo">
-          <span className="brand-chipper">{branding.agencyName || 'chipper'}</span>
-          <span className="brand-digital">{branding.agencyLogo || 'DIGITAL'}</span>
+          <img src="/rc-logo.png" alt="Red Castle Services" className="brand-logo-img" />
         </div>
       </div>
 
