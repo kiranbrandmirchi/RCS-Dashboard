@@ -1,13 +1,13 @@
 import { createContext, useContext, useState, useCallback, useEffect } from 'react';
-import { supabase } from '../lib/supabase.js';
+import { supabase } from '../lib/supabaseClient';
 
 const AuthContext = createContext(null);
 
-const DEV_BYPASS = import.meta.env.DEV;
 const AUTH_DISABLED =
   ['true', '1', 'yes'].includes(String(import.meta.env.VITE_AUTH_DISABLED || '').toLowerCase()) ||
   (typeof window !== 'undefined' && sessionStorage.getItem('auth_skip') === '1');
-const SUPABASE_TIMEOUT_MS = 5000;
+
+const SUPABASE_TIMEOUT_MS = 8000;
 
 function withTimeout(promise, ms) {
   return Promise.race([
@@ -20,127 +20,269 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [devMode, setDevMode] = useState(false);
+  const [authError, setAuthError] = useState(null);
 
-  const isAuthenticated = !!session || devMode || AUTH_DISABLED;
+  const [userRole, setUserRole] = useState('');
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [permissions, setPermissions] = useState(new Set());
+  const [allowedClients, setAllowedClients] = useState([]);
+  const [allowedPlatformAccounts, setAllowedPlatformAccounts] = useState({});
+  const [allowedClientAccounts, setAllowedClientAccounts] = useState([]);
+  const [canViewAllCustomers, setCanViewAllCustomers] = useState(false);
+  const [profileLoaded, setProfileLoaded] = useState(false);
+
+  const isAuthenticated = !!session && !authError;
+  const isActive = !authError || authError === 'pending';
+
+  const hasPermission = useCallback((key) => {
+    if (AUTH_DISABLED) return true;
+    return permissions.has(key);
+  }, [permissions]);
+
+  const isCustomerAllowed = useCallback((platform, customerId) => {
+    if (AUTH_DISABLED) return true;
+    if (canViewAllCustomers) return true;
+    const ids = allowedPlatformAccounts[platform];
+    if (!ids) return false;
+    return ids.includes(String(customerId));
+  }, [canViewAllCustomers, allowedPlatformAccounts]);
+
+  const loadUserProfile = useCallback(async (userId) => {
+    if (!userId) return;
+    try {
+      const { data: permData, error: permErr } = await withTimeout(
+        supabase.from('user_permissions_view').select('*').eq('user_id', userId),
+        SUPABASE_TIMEOUT_MS
+      );
+      if (permErr) {
+        console.warn('[Auth] user_permissions_view error:', permErr);
+        setAuthError('Account pending setup. Contact admin.');
+        return;
+      }
+
+      const rows = permData || [];
+      const first = rows[0];
+      if (!first) {
+        setAuthError('Account pending setup. Contact admin.');
+        setPermissions(new Set());
+        setUserRole('');
+        setUserName('');
+        setUserEmail('');
+        setProfileLoaded(true);
+        return;
+      }
+
+      if (first.is_active === false) {
+        setAuthError('Account deactivated. Contact admin.');
+        await supabase.auth.signOut();
+        setSession(null);
+        setUser(null);
+        setProfileLoaded(true);
+        return;
+      }
+
+      const permSet = new Set(rows.map((r) => r.permission_key).filter(Boolean));
+      const role = first.role_name || '';
+      const viewAll = ['admin', 'manager'].includes(role?.toLowerCase()) || permSet.has('customer.view_all');
+
+      setPermissions(permSet);
+      setUserRole(role);
+      setUserName(first.full_name || '');
+      setUserEmail(first.email || '');
+      setCanViewAllCustomers(viewAll);
+      setAuthError(null);
+
+      const { data: clientData, error: clientErr } = await withTimeout(
+        supabase.from('user_clients_view').select('*').eq('user_id', userId),
+        SUPABASE_TIMEOUT_MS
+      );
+      if (clientErr) {
+        console.warn('[Auth] user_clients_view error:', clientErr);
+      }
+
+      const clients = [];
+      const platformMap = {};
+      const clientAccounts = [];
+      (clientData || []).forEach((r) => {
+        if (!clients.find((c) => c.client_id === r.client_id)) {
+          clients.push({ client_id: r.client_id, client_name: r.client_name, client_code: r.client_code });
+        }
+        const platform = r.platform || 'google_ads';
+        if (!platformMap[platform]) platformMap[platform] = [];
+        if (r.platform_customer_id && !platformMap[platform].includes(String(r.platform_customer_id))) {
+          platformMap[platform].push(String(r.platform_customer_id));
+        }
+        if (r.platform_customer_id) {
+          clientAccounts.push({
+            client_id: r.client_id,
+            client_name: r.client_name,
+            platform,
+            platform_customer_id: String(r.platform_customer_id),
+            account_name: r.account_name,
+          });
+        }
+      });
+
+      setAllowedClients(clients);
+      setAllowedPlatformAccounts(platformMap);
+      setAllowedClientAccounts(clientAccounts);
+      setProfileLoaded(true);
+    } catch (err) {
+      console.warn('[Auth] loadUserProfile error:', err);
+      setAuthError('Failed to load profile. Try refreshing.');
+      setProfileLoaded(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (AUTH_DISABLED) {
-      setDevMode(true);
-      setUser({ email: 'public', user_metadata: { full_name: 'Public' } });
       setLoading(false);
+      setUser({ email: 'public', user_metadata: { full_name: 'Public' } });
+      setUserRole('admin');
+      setUserName('Public');
+      setUserEmail('public');
+      setPermissions(new Set(['sidebar.google_ads', 'tab.campaigns', 'tab.geo', 'customer.view_all']));
+      setCanViewAllCustomers(true);
+      setAllowedClients([]);
+      setAllowedPlatformAccounts({});
+      setAllowedClientAccounts([]);
+      setProfileLoaded(true);
       return;
     }
+
+    let mounted = true;
+
     withTimeout(supabase.auth.getSession(), SUPABASE_TIMEOUT_MS)
       .then(({ data: { session: s } }) => {
+        if (!mounted) return;
         if (s) {
           setSession(s);
           setUser(s?.user ?? null);
-        } else if (DEV_BYPASS) {
-          console.info('Dev mode: no session found, bypassing auth');
-          setDevMode(true);
-          setUser({ email: 'dev@localhost', user_metadata: { full_name: 'Dev User' } });
+          setAuthError(null);
+          loadUserProfile(s.user?.id);
+        } else {
+          setLoading(false);
         }
       })
       .catch((err) => {
+        if (!mounted) return;
         console.warn('Supabase unavailable:', err.message);
-        if (DEV_BYPASS) {
-          console.info('Dev mode: bypassing auth');
-          setDevMode(true);
-          setUser({ email: 'dev@localhost', user_metadata: { full_name: 'Dev User' } });
-        }
-      })
-      .finally(() => setLoading(false));
-
-    if (AUTH_DISABLED) return;
-
-    let subscription;
-    try {
-      const resp = supabase.auth.onAuthStateChange((_event, s) => {
-        setSession(s);
-        setUser(s?.user ?? null);
         setLoading(false);
       });
-      subscription = resp.data.subscription;
-    } catch (err) {
-      console.warn('Supabase onAuthStateChange failed:', err.message);
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      if (!mounted) return;
+      setSession(s);
+      setUser(s?.user ?? null);
+      if (s) {
+        setAuthError(null);
+        loadUserProfile(s.user?.id);
+      } else {
+        setProfileLoaded(false);
+        setUserRole('');
+        setUserName('');
+        setUserEmail('');
+        setPermissions(new Set());
+        setAllowedClients([]);
+        setAllowedPlatformAccounts({});
+        setAllowedClientAccounts([]);
+        setCanViewAllCustomers(false);
+        setLoading(false);
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription?.unsubscribe();
+    };
+  }, [AUTH_DISABLED, loadUserProfile]);
+
+  useEffect(() => {
+    if (session && user && profileLoaded && !authError) {
+      setLoading(false);
+    } else if (!session) {
+      setLoading(false);
     }
+  }, [session, user, profileLoaded, authError]);
 
-    return () => subscription?.unsubscribe();
-  }, []);
-
-  const login = useCallback(async (email, password) => {
+  const signIn = useCallback(async (email, password) => {
+    setAuthError(null);
     try {
       const { data, error } = await withTimeout(
         supabase.auth.signInWithPassword({
           email: String(email).trim(),
           password: String(password),
         }),
-        SUPABASE_TIMEOUT_MS,
+        SUPABASE_TIMEOUT_MS
       );
-      if (error) {
-        return { success: false, error: error.message };
-      }
-      setDevMode(false);
+      if (error) return { success: false, error: error.message };
       setSession(data.session);
       setUser(data.user);
+      setLoading(true);
       return { success: true };
-    } catch {
-      if (DEV_BYPASS) {
-        setDevMode(true);
-        setUser({ email: String(email).trim(), user_metadata: { full_name: 'Dev User' } });
-        return { success: true };
-      }
-      return { success: false, error: 'Cannot reach authentication server. Check your connection or Supabase project status.' };
+    } catch (err) {
+      return { success: false, error: err.message || 'Cannot reach authentication server.' };
     }
   }, []);
 
-  const signup = useCallback(async (email, password, fullName = '') => {
+  const signUp = useCallback(async (email, password, fullName = '') => {
+    setAuthError(null);
     try {
       const { data, error } = await withTimeout(
         supabase.auth.signUp({
           email: String(email).trim(),
           password: String(password),
           options: {
-            data: {
-              full_name: fullName ? String(fullName).trim() : null,
-            },
+            data: { full_name: fullName ? String(fullName).trim() : null },
           },
         }),
-        SUPABASE_TIMEOUT_MS,
+        SUPABASE_TIMEOUT_MS
       );
-      if (error) {
-        return { success: false, error: error.message };
-      }
-      setDevMode(false);
+      if (error) return { success: false, error: error.message };
       setSession(data.session);
       setUser(data.user);
       return { success: true };
-    } catch {
-      if (DEV_BYPASS) {
-        setDevMode(true);
-        setUser({ email: String(email).trim(), user_metadata: { full_name: fullName || 'Dev User' } });
-        return { success: true };
-      }
-      return { success: false, error: 'Cannot reach authentication server. Check your connection or Supabase project status.' };
+    } catch (err) {
+      return { success: false, error: err.message || 'Cannot reach authentication server.' };
     }
   }, []);
 
-  const logout = useCallback(async () => {
-    await supabase.auth.signOut().catch(() => {});
+  const signOut = useCallback(async () => {
+    await supabase.auth.signOut();
     setSession(null);
     setUser(null);
-    setDevMode(false);
+    setUserRole('');
+    setUserName('');
+    setUserEmail('');
+    setPermissions(new Set());
+    setAllowedClients([]);
+    setAllowedPlatformAccounts({});
+    setAllowedClientAccounts([]);
+    setCanViewAllCustomers(false);
+    setProfileLoaded(false);
+    setAuthError(null);
   }, []);
 
   const value = {
-    isAuthenticated,
     user,
     session,
     loading,
-    login,
-    signup,
-    logout,
+    authError,
+    isAuthenticated,
+    userRole,
+    userName,
+    userEmail,
+    permissions,
+    allowedClients,
+    allowedPlatformAccounts,
+    allowedClientAccounts,
+    canViewAllCustomers,
+    hasPermission,
+    isCustomerAllowed,
+    signIn,
+    signUp,
+    signOut,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

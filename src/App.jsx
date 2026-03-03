@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from './context/AuthContext';
 import { useApp } from './context/AppContext';
-import { LoginPage } from './pages/LoginPage';
-import { SignupPage } from './pages/SignupPage';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { Login } from './pages/Login';
+import { Signup } from './pages/Signup';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
 import { NotificationContainer } from './components/Notification';
@@ -10,6 +12,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { GoogleAdsPage } from './pages/GoogleAdsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { PlaceholderPage } from './pages/PlaceholderPage';
+import { Admin } from './pages/Admin';
 
 const PLACEHOLDER_PAGES = {
   'meta-ads':     { title: 'Meta Ads Performance', subtitle: 'Coming soon - Full Meta Ads analytics' },
@@ -45,46 +48,93 @@ function CurrentPage() {
   return <DashboardPage />;
 }
 
-export default function App() {
-  const { isAuthenticated, loading } = useAuth();
-  const { showNotification } = useApp();
-  const [authView, setAuthView] = useState('login'); // 'login' | 'signup'
+function DashboardLayoutContent() {
+  const location = useLocation();
+  const { hasPermission } = useAuth();
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      showNotification('Welcome to your Red Castle Dashboard!');
-    }
-  }, [isAuthenticated, showNotification]);
-
-  if (loading) {
-    return (
-      <div className="login-page">
-        <div className="login-card">
-          <p className="login-subtitle">Loading…</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    if (authView === 'signup') {
+  if (location.pathname === '/admin') {
+    if (!hasPermission('action.manage_users')) {
       return (
-        <SignupPage onSwitchToLogin={() => setAuthView('login')} />
+        <div className="page-content">
+          <div className="card" style={{ padding: 48, textAlign: 'center' }}>
+            <h2>Access Denied</h2>
+            <p>You do not have permission to access the Admin panel.</p>
+          </div>
+        </div>
       );
     }
-    return (
-      <LoginPage onSwitchToSignup={() => setAuthView('signup')} />
-    );
+    return <Admin />;
   }
+
+  return <CurrentPage />;
+}
+
+function DashboardLayout() {
+  const { showNotification } = useApp();
+  const { userName } = useAuth();
+
+  useEffect(() => {
+    if (userName) {
+      showNotification(`Welcome back, ${userName}!`);
+    }
+  }, [userName, showNotification]);
 
   return (
     <div className="app-layout">
       <Sidebar />
       <main className="main-content">
         <Header />
-        <CurrentPage />
+        <DashboardLayoutContent />
       </main>
       <NotificationContainer />
     </div>
+  );
+}
+
+function LoginRedirect({ children }) {
+  const { isAuthenticated, loading } = useAuth();
+  if (loading) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <div className="auth-loading-spinner" />
+          <p className="auth-subtitle">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+  if (isAuthenticated) {
+    return <Navigate to="/" replace />;
+  }
+  return children;
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={
+          <LoginRedirect>
+            <Login />
+          </LoginRedirect>
+        } />
+        <Route path="/signup" element={
+          <LoginRedirect>
+            <Signup />
+          </LoginRedirect>
+        } />
+        <Route path="/" element={
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
+        } />
+        <Route path="/admin" element={
+          <ProtectedRoute>
+            <DashboardLayout />
+          </ProtectedRoute>
+        } />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </BrowserRouter>
   );
 }

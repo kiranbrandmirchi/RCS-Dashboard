@@ -1,0 +1,75 @@
+import { useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
+
+export function Login() {
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setSubmitting(true);
+    try {
+      const result = await signIn(email, password);
+      if (result.success) {
+        navigate('/', { replace: true });
+        return;
+      }
+      setError(result.error || 'Sign in failed');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="auth-page">
+      <div className="auth-card">
+        <img src="/rc-logo-full.png" alt="Red Castle Services" className="auth-logo" />
+        <h1 className="auth-title">Sign In</h1>
+        <p className="auth-subtitle">Sign in to your reporting dashboard</p>
+        <form className="auth-form" onSubmit={handleSubmit}>
+          <div className="auth-form-group">
+            <label htmlFor="login-email">Email</label>
+            <input
+              id="login-email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@example.com"
+              required
+            />
+          </div>
+          <div className="auth-form-group">
+            <label htmlFor="login-password">Password</label>
+            <input
+              id="login-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Password"
+              required
+            />
+          </div>
+          <button type="submit" className="btn btn-primary auth-submit" disabled={submitting}>
+            {submitting ? 'Signing in…' : 'Sign In'}
+          </button>
+          {error && (
+            <div className="auth-error" role="alert">
+              {error}
+            </div>
+          )}
+          <p className="auth-switch">
+            Don&apos;t have an account? <Link to="/signup">Sign Up</Link>
+          </p>
+        </form>
+      </div>
+    </div>
+  );
+}

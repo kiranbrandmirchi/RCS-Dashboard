@@ -115,6 +115,7 @@ export const PAGE_TITLES = {
   creatives: 'Creative Analysis',
   events: 'Events / Special Campaigns',
   settings: 'White-Label Settings',
+  admin: 'Admin Panel',
 };
 
 export const CLIENTS = [

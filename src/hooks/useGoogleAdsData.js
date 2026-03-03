@@ -1,18 +1,42 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { sbFetchAll, sbFetchAllParallel, buildQuery } from '../lib/supabaseRest';
+import { supabase } from '../lib/supabaseClient';
+import { useAuth } from '../context/AuthContext';
+
+const GMT5_OFFSET_MS = -5 * 60 * 60 * 1000;
+
+function nowGMT5() {
+  return new Date(Date.now() + GMT5_OFFSET_MS);
+}
+
+function fmtYMD(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
 
 function computeDateRange(preset, customFrom, customTo) {
-  const today = new Date();
-  const fmt = (d) => d.toISOString().slice(0, 10);
-  const daysAgo = (n) => { const d = new Date(today); d.setDate(d.getDate() - n); return d; };
+  const today = nowGMT5();
+  const fmt = (d) => fmtYMD(d);
+  const daysAgo = (n) => { const d = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - n)); return d; };
   switch (preset) {
     case 'today': return { from: fmt(today), to: fmt(today) };
     case 'yesterday': return { from: fmt(daysAgo(1)), to: fmt(daysAgo(1)) };
     case 'last7': return { from: fmt(daysAgo(6)), to: fmt(today) };
     case 'last14': return { from: fmt(daysAgo(13)), to: fmt(today) };
     case 'last30': return { from: fmt(daysAgo(29)), to: fmt(today) };
-    case 'this_month': { const f = new Date(today.getFullYear(), today.getMonth(), 1); return { from: fmt(f), to: fmt(today) }; }
-    case 'last_month': { const f = new Date(today.getFullYear(), today.getMonth() - 1, 1); const l = new Date(today.getFullYear(), today.getMonth(), 0); return { from: fmt(f), to: fmt(l) }; }
+    case 'this_month': {
+      const y = today.getUTCFullYear(), m = today.getUTCMonth();
+      const first = new Date(Date.UTC(y, m, 1));
+      return { from: fmt(first), to: fmt(today) };
+    }
+    case 'last_month': {
+      const y = today.getUTCFullYear(), m = today.getUTCMonth();
+      const first = new Date(Date.UTC(y, m - 1, 1));
+      const last = new Date(Date.UTC(y, m, 0));
+      return { from: fmt(first), to: fmt(last) };
+    }
     case 'custom': return { from: customFrom || null, to: customTo || null };
     default: return { from: null, to: null };
   }
@@ -42,8 +66,10 @@ function addMetrics(o) {
 }
 
 export function useGoogleAdsData() {
+  const { canViewAllCustomers, allowedClientAccounts } = useAuth();
+
   const [filters, setFilters] = useState({
-    datePreset: 'all', dateFrom: '', dateTo: '',
+    datePreset: 'this_month', dateFrom: '', dateTo: '',
     compareOn: false, compareFrom: '', compareTo: '',
     customerId: 'ALL', channelType: 'all', status: 'all',
     campaignSearch: '', adGroupSearch: '', keywordSearch: '',
@@ -57,14 +83,18 @@ export function useGoogleAdsData() {
   const [rawConversions, setRawConversions] = useState([]);
   const [rawCompareCampaigns, setRawCompareCampaigns] = useState([]);
   const [campaignStatusMap, setCampaignStatusMap] = useState(new Map());
-  const [customers, setCustomers] = useState([]);
+  const [clientOptions, setClientOptions] = useState([]);
   const [channelTypes, setChannelTypes] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   const optionsLoaded = useRef(false);
+  const clientIdToPlatformIds = useRef(new Map());
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
+
+  const customers = clientOptions;
+  const showAllClientsOption = canViewAllCustomers;
 
   const updateFilter = useCallback((key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -80,16 +110,55 @@ export function useGoogleAdsData() {
     setError(null);
     try {
       const { from, to } = computeDateRange(f.datePreset, f.dateFrom, f.dateTo);
-      const cid = f.customerId;
+      let cid = f.customerId;
 
       if (!optionsLoaded.current) {
-        const custData = await sbFetchAll(
-          'gads_customers?select=customer_id,descriptive_name&status=eq.ENABLED&order=descriptive_name'
-        );
-        console.log('[GAds] gads_customers:', custData.length, 'rows');
-        if (custData.length) {
-          setCustomers(custData.map((c) => ({ id: c.customer_id, name: c.descriptive_name || c.customer_id })));
+        if (canViewAllCustomers) {
+          const [mcRes, cpaRes] = await Promise.all([
+            supabase.from('master_clients').select('id,client_name,client_code').eq('is_active', true).order('client_name'),
+            supabase.from('client_platform_accounts').select('client_id,platform_customer_id').eq('platform', 'google_ads'),
+          ]);
+          const mcData = mcRes.data || [];
+          const cpaData = cpaRes.data || [];
+          if (mcRes.error) console.warn('[GAds] master_clients error:', mcRes.error);
+          if (cpaRes.error) console.warn('[GAds] client_platform_accounts error:', cpaRes.error);
+          const map = new Map();
+          (cpaData || []).forEach((r) => {
+            if (!map.has(r.client_id)) map.set(r.client_id, []);
+            map.get(r.client_id).push(String(r.platform_customer_id));
+          });
+          clientIdToPlatformIds.current = map;
+          const options = [{ id: 'ALL', name: 'All Clients' }];
+          (mcData || []).forEach((c) => {
+            options.push({ id: c.id, name: c.client_name });
+          });
+          setClientOptions(options);
+        } else {
+          const gadsAccounts = (allowedClientAccounts || []).filter((a) => a.platform === 'google_ads');
+          if (gadsAccounts.length === 0) {
+            cid = '__NONE__';
+            setClientOptions([{ id: '__NONE__', name: 'No accounts assigned. Contact admin.' }]);
+            setFilters((prev) => ({ ...prev, customerId: '__NONE__' }));
+          } else if (gadsAccounts.length === 1) {
+            cid = gadsAccounts[0].platform_customer_id;
+            setClientOptions([{ id: gadsAccounts[0].platform_customer_id, name: gadsAccounts[0].client_name }]);
+            setFilters((prev) => ({ ...prev, customerId: gadsAccounts[0].platform_customer_id }));
+          } else {
+            const options = [
+              { id: 'ALL_MINE', name: 'All my accounts' },
+              ...gadsAccounts.map((a) => ({
+                id: a.platform_customer_id,
+                name: a.client_name + (a.account_name ? ` (${a.account_name})` : ''),
+              })),
+            ];
+            setClientOptions(options);
+            if (cid === 'ALL') {
+              cid = 'ALL_MINE';
+              setFilters((prev) => ({ ...prev, customerId: 'ALL_MINE' }));
+            }
+          }
         }
+        optionsLoaded.current = true;
       }
 
       const campaignExtra = '&order=date.desc'
@@ -114,25 +183,58 @@ export function useGoogleAdsData() {
         return [];
       });
 
+      const NO_MATCH_ID = '0';
+
+      const resolveCustomerFilter = () => {
+        if (cid === 'ALL') {
+          if (!canViewAllCustomers) {
+            const ids = (allowedClientAccounts || []).filter((a) => a.platform === 'google_ads').map((a) => a.platform_customer_id);
+            return ids.length ? { customerIds: ids } : { customerIds: [NO_MATCH_ID] };
+          }
+          return {};
+        }
+        if (cid === '__NONE__') return { customerIds: [NO_MATCH_ID] };
+        if (cid === 'ALL_MINE') {
+          const ids = (allowedClientAccounts || []).filter((a) => a.platform === 'google_ads').map((a) => a.platform_customer_id);
+          return ids.length ? { customerIds: ids } : { customerIds: [NO_MATCH_ID] };
+        }
+        const isClientId = typeof cid === 'string' && cid.includes('-') && cid.length > 10;
+        if (isClientId) {
+          const ids = clientIdToPlatformIds.current.get(cid) || [];
+          return ids.length ? { customerIds: ids } : { customerIds: [NO_MATCH_ID] };
+        }
+        return { customerId: cid };
+      };
+
+      const queryParams = (extra) => {
+        const filter = resolveCustomerFilter();
+        return { ...filter, dateFrom: from, dateTo: to, extra };
+      };
+
+      const baseFilter = resolveCustomerFilter();
+      const qParams = { ...baseFilter, dateFrom: from, dateTo: to, extra: campaignExtra };
+      const statusParams = baseFilter;
+      const qParamsCompare = { ...baseFilter, dateFrom: compFrom, dateTo: compTo, extra: campaignExtra };
+
       const [campaignData, statusData] = await Promise.all([
-        safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: campaignExtra }))),
-        safe(sbFetchAllParallel(buildQuery('gads_campaign_status', { customerId: cid }))),
+        safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', qParams))),
+        safe(sbFetchAllParallel(buildQuery('gads_campaign_status', statusParams))),
       ]);
 
       const [adGroupData, keywordData, searchTermData] = await Promise.all([
-        safe(sbFetchAllParallel(buildQuery('gads_adgroup_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: adGroupExtra }))),
-        safe(sbFetchAllParallel(buildQuery('gads_keyword_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: keywordExtra }))),
-        safe(sbFetchAllParallel(buildQuery('gads_search_term_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
+        safe(sbFetchAllParallel(buildQuery('gads_adgroup_daily', queryParams(adGroupExtra)))),
+        safe(sbFetchAllParallel(buildQuery('gads_keyword_daily', queryParams(keywordExtra)))),
+        safe(sbFetchAllParallel(buildQuery('gads_search_term_daily', queryParams('&order=date.desc')))),
       ]);
 
       const [geoData, conversionData] = await Promise.all([
-        safe(sbFetchAllParallel(buildQuery('gads_geo_location_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
-        safe(sbFetchAllParallel(buildQuery('gads_conversion_daily', { customerId: cid, dateFrom: from, dateTo: to, extra: '&order=date.desc' }))),
+        safe(sbFetchAllParallel(buildQuery('gads_geo_location_daily', queryParams('&order=date.desc')))),
+        safe(sbFetchAllParallel(buildQuery('gads_conversion_daily', queryParams('&order=date.desc')))),
       ]);
 
       let compareCampaignData = [];
       if (f.compareOn && compFrom && compTo) {
-        compareCampaignData = await safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', { customerId: cid, dateFrom: compFrom, dateTo: compTo, extra: campaignExtra })));
+        compareCampaignData = await safe(sbFetchAllParallel(buildQuery('gads_campaign_daily', qParamsCompare)));
       }
 
       console.log('[GAds] Fetch results:', {
@@ -194,8 +296,9 @@ export function useGoogleAdsData() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canViewAllCustomers, allowedClientAccounts]);
 
+  useEffect(() => { optionsLoaded.current = false; }, [canViewAllCustomers, allowedClientAccounts]);
   useEffect(() => { fetchData(); }, [fetchData]);
 
   /* ── KPIs ── */
@@ -271,8 +374,25 @@ export function useGoogleAdsData() {
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
   }, [rawCampaigns, campaignStatusMap]);
 
-  /* ── Ad Groups ── */
+  /* ── Ad Groups (with match type from keywords) ── */
   const adGroupsAgg = useMemo(() => {
+    const matchByAdGroup = new Map();
+    rawKeywords.forEach((r) => {
+      const id = r.ad_group_id;
+      const cost = num(r.cost);
+      if (!matchByAdGroup.has(id)) matchByAdGroup.set(id, {});
+      const m = matchByAdGroup.get(id);
+      const mt = r.keyword_match_type || 'UNKNOWN';
+      m[mt] = (m[mt] || 0) + cost;
+    });
+    const getDominantMatchType = (adGroupId) => {
+      const m = matchByAdGroup.get(adGroupId);
+      if (!m) return '';
+      let best = '', bestCost = 0;
+      Object.entries(m).forEach(([mt, c]) => { if (c > bestCost) { bestCost = c; best = mt; } });
+      return best;
+    };
+
     const map = new Map();
     rawAdGroups.forEach((r) => {
       const id = r.ad_group_id;
@@ -281,7 +401,7 @@ export function useGoogleAdsData() {
         ad_group_name: r.ad_group_name,
         campaign_name: r.campaign_name || '',
         campaign_id: r.campaign_id,
-        ad_group_status: '',
+        keyword_match_type: getDominantMatchType(id),
         cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0,
       });
       const a = map.get(id);
@@ -292,7 +412,7 @@ export function useGoogleAdsData() {
       a.conversions_value += num(r.conversions_value);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawAdGroups]);
+  }, [rawAdGroups, rawKeywords]);
 
   /* ── Keywords ── */
   const keywordsAgg = useMemo(() => {
@@ -321,14 +441,24 @@ export function useGoogleAdsData() {
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
   }, [rawKeywords]);
 
-  /* ── Search Terms ── */
+  /* ── Search Terms (with top keyword from same ad group) ── */
   const searchTermsAgg = useMemo(() => {
+    const topKeywordByAdGroup = new Map();
+    rawKeywords.forEach((r) => {
+      const id = r.ad_group_id;
+      const cost = num(r.cost);
+      const cur = topKeywordByAdGroup.get(id);
+      if (!cur || cost > cur.cost) topKeywordByAdGroup.set(id, { keyword_text: r.keyword_text, cost });
+    });
+
     const map = new Map();
     rawSearchTerms.forEach((r) => {
       const id = `${r.ad_group_id}_${r.search_term}`;
+      const topKw = topKeywordByAdGroup.get(r.ad_group_id);
       if (!map.has(id)) map.set(id, {
         _key: id,
         search_term: r.search_term,
+        keyword_text: topKw?.keyword_text || '',
         campaign_id: r.campaign_id,
         campaign_name: r.campaign_name || '',
         ad_group_id: r.ad_group_id,
@@ -342,7 +472,7 @@ export function useGoogleAdsData() {
       a.conversions_value += num(r.conversions_value);
     });
     return [...map.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
-  }, [rawSearchTerms]);
+  }, [rawSearchTerms, rawKeywords]);
 
   /* ── Geo ── */
   const geoAgg = useMemo(() => {
@@ -415,6 +545,34 @@ export function useGoogleAdsData() {
     return [...map.values()].map(addMetrics).sort((a, b) => a.date.localeCompare(b.date));
   }, [rawCampaigns]);
 
+  /* ── Daily Breakdown (date rows with expandable campaigns) ── */
+  const dailyBreakdown = useMemo(() => {
+    const byDate = new Map();
+    rawCampaigns.forEach((r) => {
+      const d = r.date; if (!d) return;
+      if (!byDate.has(d)) byDate.set(d, { date: d, cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0, campaigns: new Map() });
+      const day = byDate.get(d);
+      day.cost += num(r.cost);
+      day.clicks += num(r.clicks);
+      day.impressions += num(r.impressions);
+      day.conversions += num(r.conversions);
+      day.conversions_value += num(r.conversions_value);
+      const cid = r.campaign_id;
+      if (!day.campaigns.has(cid)) day.campaigns.set(cid, { campaign_id: cid, campaign_name: r.campaign_name, cost: 0, clicks: 0, impressions: 0, conversions: 0, conversions_value: 0 });
+      const c = day.campaigns.get(cid);
+      c.cost += num(r.cost);
+      c.clicks += num(r.clicks);
+      c.impressions += num(r.impressions);
+      c.conversions += num(r.conversions);
+      c.conversions_value += num(r.conversions_value);
+    });
+    return [...byDate.values()].map((day) => {
+      const campaigns = [...day.campaigns.values()].map(addMetrics).sort((a, b) => b.cost - a.cost);
+      delete day.campaigns;
+      return { ...addMetrics(day), campaigns };
+    }).sort((a, b) => b.date.localeCompare(a.date));
+  }, [rawCampaigns]);
+
   /* ── Compare KPIs ── */
   const compareKpis = useMemo(() => {
     if (!rawCompareCampaigns.length) return null;
@@ -454,7 +612,7 @@ export function useGoogleAdsData() {
 
   return {
     filters, updateFilter, batchUpdateFilters, fetchData,
-    loading, error, customers, channelTypes,
+    loading, error, customers, channelTypes, showAllClientsOption,
     kpis, compareKpis,
     campaignTypes: campaignTypesAgg,
     campaigns: campaignsAgg,
@@ -463,7 +621,7 @@ export function useGoogleAdsData() {
     searchTerms: searchTermsAgg,
     geoData: geoAgg,
     conversionsData: conversionsAgg,
-    dailyTrends, compareDailyTrends,
+    dailyTrends, compareDailyTrends, dailyBreakdown,
     rowCounts: {
       campaigns: rawCampaigns.length,
       adGroups: rawAdGroups.length,

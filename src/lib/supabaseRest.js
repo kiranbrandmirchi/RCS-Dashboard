@@ -103,9 +103,13 @@ export async function sbFetchAllParallel(endpoint) {
   return sbFetchAll(endpoint);
 }
 
-export function buildQuery(table, { customerId, dateFrom, dateTo, extra } = {}) {
+export function buildQuery(table, { customerId, customerIds, dateFrom, dateTo, extra } = {}) {
   let q = table + '?select=*';
-  if (customerId && customerId !== 'ALL') q += '&customer_id=eq.' + customerId;
+  if (customerIds && Array.isArray(customerIds) && customerIds.length > 0) {
+    q += '&customer_id=in.(' + customerIds.join(',') + ')';
+  } else if (customerId && customerId !== 'ALL' && customerId !== 'ALL_MINE') {
+    q += '&customer_id=eq.' + customerId;
+  }
   if (dateFrom) q += '&date=gte.' + dateFrom;
   if (dateTo) q += '&date=lte.' + dateTo;
   if (extra) q += extra;

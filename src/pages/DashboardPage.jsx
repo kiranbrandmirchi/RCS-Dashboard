@@ -2,17 +2,20 @@ import { useEffect, useRef } from 'react';
 import Chart from 'chart.js/auto';
 import { STATIC } from '../data/staticData';
 import { formatCurrency, formatCurrency2, formatNumber, formatDec, formatShort } from '../utils/format';
+import { useAuth } from '../context/AuthContext';
 
 const KPI_KEYS = ['totalSpend', 'totalConversions', 'blendedCPA', 'websiteRevenue', 'blendedROAS', 'totalImpressions'];
 
 export function DashboardPage() {
   const chartRef = useRef(null);
   const chartInstance = useRef(null);
+  const { canViewAllCustomers } = useAuth();
 
   const d = STATIC.exec;
+  const showSampleData = canViewAllCustomers;
 
   useEffect(() => {
-    if (!chartRef.current) return;
+    if (!chartRef.current || !showSampleData) return;
     const { labels, revenue, spend } = d.chartRevenueTrend;
     if (chartInstance.current) chartInstance.current.destroy();
     chartInstance.current = new Chart(chartRef.current, {
@@ -37,13 +40,31 @@ export function DashboardPage() {
       },
     });
     return () => { if (chartInstance.current) chartInstance.current.destroy(); };
-  }, []);
+  }, [showSampleData]);
 
-  const totalSpend = d.spendByPlatform.reduce((s, p) => s + p.spend, 0);
-  const effTotal = d.platformEfficiency.reduce((a, p) => ({ spend: a.spend + p.spend, conv: a.conv + p.conv }), { spend: 0, conv: 0 });
+  const totalSpend = showSampleData ? d.spendByPlatform.reduce((s, p) => s + p.spend, 0) : 0;
+  const effTotal = showSampleData ? d.platformEfficiency.reduce((a, p) => ({ spend: a.spend + p.spend, conv: a.conv + p.conv }), { spend: 0, conv: 0 }) : { spend: 0, conv: 0 };
   const blendedCpa = effTotal.conv > 0 ? effTotal.spend / effTotal.conv : 0;
-  const geoTotal = d.geoDistribution.reduce((a, g) => ({ spend: a.spend + g.spend, conv: a.conv + g.conv }), { spend: 0, conv: 0 });
+  const geoTotal = showSampleData ? d.geoDistribution.reduce((a, g) => ({ spend: a.spend + g.spend, conv: a.conv + g.conv }), { spend: 0, conv: 0 }) : { spend: 0, conv: 0 };
   const geoCpa = geoTotal.conv > 0 ? geoTotal.spend / geoTotal.conv : 0;
+
+  if (!showSampleData) {
+    return (
+      <div className="page-section active" id="page-dashboard">
+        <div className="page-content">
+          <div className="page-title-bar">
+            <h2>Executive Dashboard</h2>
+            <p>Cross-platform performance summary · All channels combined</p>
+          </div>
+          <div className="panel">
+            <div className="panel-body">
+              <p className="admin-empty-hint">No cross-platform data available for your account. Use the Google Ads report to view your assigned client data.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-section active" id="page-dashboard">

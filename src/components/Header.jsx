@@ -1,9 +1,19 @@
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useApp } from '../context/AppContext';
 import { useAuth } from '../context/AuthContext';
+import { PermissionGate } from './PermissionGate';
 
 export function Header() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const { headerTitle, toggleSidebar, sidebarCollapsed, collapseSidebar, showNotification } = useApp();
-  const { logout } = useAuth();
+  const displayTitle = location.pathname === '/admin' ? 'Admin Panel' : headerTitle;
+  const { signOut, userName, userEmail } = useAuth();
+
+  const handleLogout = async () => {
+    await signOut();
+    navigate('/login', { replace: true });
+  };
 
   const handleExportPDF = () => {
     showNotification('PDF export would be generated here. This feature requires server-side processing or a PDF library like jsPDF.');
@@ -44,15 +54,25 @@ export function Header() {
             <path d="M10 3L5 8L10 13" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
         </button>
-        <h1 id="headerTitle">{headerTitle}</h1>
+        <h1 id="headerTitle">{displayTitle}</h1>
       </div>
       <div className="header-right">
         <div className="header-filters" id="headerFilters">
           <span id="sb-sync-badge" style={{ color: 'var(--accent)', fontSize: 11, fontWeight: 600 }}>Live</span>
         </div>
-        <button type="button" className="btn btn-outline" onClick={handleExportPDF}>↓ Export PDF</button>
-        <button type="button" className="btn btn-accent" onClick={handleShare}>Share Report</button>
-        <button type="button" className="btn btn-outline" onClick={logout} title="Sign out">Log out</button>
+        <PermissionGate permission="action.export_pdf">
+          <button type="button" className="btn btn-outline" onClick={handleExportPDF}>↓ Export PDF</button>
+        </PermissionGate>
+        <PermissionGate permission="action.share_report">
+          <button type="button" className="btn btn-accent" onClick={handleShare}>Share Report</button>
+        </PermissionGate>
+        {/* User info */}
+        {(userName || userEmail) && (
+          <span className="header-user-info" title={userEmail}>
+            {userName || userEmail}
+          </span>
+        )}
+        <button type="button" className="btn btn-outline" onClick={handleLogout} title="Sign out">Log out</button>
       </div>
     </header>
   );

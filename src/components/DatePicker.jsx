@@ -13,8 +13,13 @@ const PRESETS = [
 ];
 
 const DOW = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+const GMT5_OFFSET_MS = -5 * 60 * 60 * 1000;
 
-/* ── Date helpers ── */
+function nowGMT5() {
+  return new Date(Date.now() + GMT5_OFFSET_MS);
+}
+
+/* ── Date helpers (GMT-5) ── */
 
 function sameDay(a, b) {
   if (!a || !b) return false;
@@ -70,7 +75,8 @@ function startOfDay(d) {
 }
 
 function resolvePreset(key) {
-  const today = startOfDay(new Date());
+  const t = nowGMT5();
+  const today = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
   switch (key) {
     case 'today': return { from: today, to: today };
     case 'yesterday': { const y = addDays(today, -1); return { from: y, to: y }; }
@@ -100,7 +106,7 @@ export function DateRangePicker({ preset, dateFrom, dateTo, compareOn, compareFr
   const [isOpen, setIsOpen] = useState(false);
 
   const [draft, setDraft] = useState(() => ({
-    preset: preset || 'last30',
+    preset: preset || 'this_month',
     from: parseISO(dateFrom),
     to: parseISO(dateTo),
     compare: compareOn || false,
@@ -123,7 +129,7 @@ export function DateRangePicker({ preset, dateFrom, dateTo, compareOn, compareFr
     const f = parseISO(dateFrom);
     const t = parseISO(dateTo);
     setDraft({
-      preset: preset || 'last30',
+      preset: preset || 'this_month',
       from: f,
       to: t,
       compare: compareOn || false,
@@ -371,7 +377,7 @@ export function DateRangePicker({ preset, dateFrom, dateTo, compareOn, compareFr
   })();
 
   const triggerPresetLabel = presetLabel(
-    preset || 'last30'
+    preset || 'this_month'
   );
 
   const triggerRangeText = (() => {
@@ -436,7 +442,7 @@ export function DateRangePicker({ preset, dateFrom, dateTo, compareOn, compareFr
             </div>
             <div className="dp-footer-controls">
               <div className="dp-footer-left">
-                <span className="dp-tz">🕐 UTC</span>
+                <span className="dp-tz">🕐 GMT-5</span>
                 <label className="dp-compare-toggle">
                   <span className="toggle-switch">
                     <input type="checkbox" checked={draft.compare} onChange={handleCompareToggle} />
